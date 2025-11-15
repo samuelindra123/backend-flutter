@@ -122,23 +122,42 @@ app.post('/api/auth/verification/send', async (req, res, next) => {
       ],
     );
 
+    const gmailUser = required(GMAIL_USER, 'GMAIL_USER');
+    const gmailPass = required(GMAIL_APP_PASSWORD, 'GMAIL_APP_PASSWORD');
+    
+    console.log(`[Email] Preparing to send verification email to: ${email}`);
+    
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: required(GMAIL_USER, 'GMAIL_USER'),
-        pass: required(GMAIL_APP_PASSWORD, 'GMAIL_APP_PASSWORD'),
+        user: gmailUser,
+        pass: gmailPass,
       },
     });
 
-    await transporter.sendMail({
-      from: `CloudNest <${GMAIL_USER}>`,
+    // Verify transporter connection
+    try {
+      await transporter.verify();
+      console.log('[Email] Gmail SMTP connection verified successfully');
+    } catch (verifyErr) {
+      console.error('[Email] Gmail SMTP verification failed:', verifyErr.message);
+      throw new Error(`Gmail authentication failed: ${verifyErr.message}. Check GMAIL_USER and GMAIL_APP_PASSWORD in .env`);
+    }
+
+    const mailOptions = {
+      from: `CloudNest <${gmailUser}>`,
       to: email,
       subject: 'Verify your CloudNest account',
       html: buildEmailTemplate({ fullName, link: verificationLink, expiresAt }),
       text: `Hi ${fullName}, verify your CloudNest account: ${verificationLink}`,
-    });
+    };
 
-    res.status(202).json({ status: 'sent', expiresAt });
+    console.log(`[Email] Sending email to ${email}...`);
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`[Email] Email sent successfully. MessageId: ${info.messageId}`);
+    console.log(`[Email] Verification link: ${verificationLink}`);
+
+    res.status(202).json({ status: 'sent', expiresAt, messageId: info.messageId });
   } catch (err) {
     next(err);
   }
