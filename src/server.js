@@ -174,33 +174,56 @@ app.get('/api/auth/verification/confirm', async (req, res, next) => {
     const databases = new sdk.Databases(client);
     const users = new sdk.Users(client);
 
-    const result = await databases.listDocuments(
-      required(APPWRITE_DATABASE_ID, 'APPWRITE_DATABASE_ID'),
-      required(APPWRITE_VERIFICATION_COLLECTION_ID, 'APPWRITE_VERIFICATION_COLLECTION_ID'),
-      [
-        sdk.Query.equal('userId', userId),
-        sdk.Query.equal('secret', secret),
-        sdk.Query.equal('type', 'email_verification'),
-        sdk.Query.equal('used', false),
-        sdk.Query.greaterThan('expire', new Date().toISOString()),
-      ],
-    );
+    const databaseId = required(APPWRITE_DATABASE_ID, 'APPWRITE_DATABASE_ID');
+    const collectionId = required(APPWRITE_VERIFICATION_COLLECTION_ID, 'APPWRITE_VERIFICATION_COLLECTION_ID');
+    const nowIso = new Date().toISOString();
 
-    if (!result.documents || result.documents.length === 0) {
+    // Build query parameters manually to avoid body in GET request
+    // Format: equal("field","value") or equal("field",false) or greaterThan("field","ISO_DATE")
+    const queryParts = [
+      `equal("userId","${userId}")`,
+      `equal("secret","${secret}")`,
+      `equal("type","email_verification")`,
+      `equal("used",false)`,
+      `greaterThan("expire","${nowIso}")`,
+      `limit(1)`,
+    ];
+    
+    // Build query string: queries[0]=...&queries[1]=...
+    const queryString = queryParts
+      .map((q, i) => `queries[${i}]=${encodeURIComponent(q)}`)
+      .join('&');
+    
+    const apiPath = `/databases/${databaseId}/collections/${collectionId}/documents?${queryString}`;
+
+    // Use client.call directly with GET (no body, minimal headers)
+    const result = await client.call('get', apiPath, {}, {});
+
+    const documents = result?.documents || [];
+    if (documents.length === 0) {
+      console.log(`[Verify] Invalid or expired token for user: ${userId}`);
       return res.redirect(`${APP_URL}/verify-failed?error=invalid_token`);
     }
 
-    const tokenDoc = result.documents[0];
+    const tokenDoc = documents[0];
+    console.log(`[Verify] Found valid token for user: ${userId}`);
+
+    // Update email verification status
     await users.updateEmailVerification(userId, true);
+    console.log(`[Verify] Email verified for user: ${userId}`);
+
+    // Mark token as used
     await databases.updateDocument(
-      required(APPWRITE_DATABASE_ID, 'APPWRITE_DATABASE_ID'),
-      required(APPWRITE_VERIFICATION_COLLECTION_ID, 'APPWRITE_VERIFICATION_COLLECTION_ID'),
+      databaseId,
+      collectionId,
       tokenDoc.$id,
-      { used: true, usedAt: new Date().toISOString() },
+      { used: true, usedAt: nowIso },
     );
+    console.log(`[Verify] Token marked as used: ${tokenDoc.$id}`);
 
     return res.redirect(`${APP_URL}/verify-success`);
   } catch (err) {
+    console.error('[Verify] Error:', err.message);
     next(err);
   }
 });
